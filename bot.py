@@ -11,10 +11,11 @@ from aiogram.client.default import DefaultBotProperties
 import yt_dlp
 
 # === ВЕРСИЯ БОТА ===
-BOT_VERSION = "v2.1"
+BOT_VERSION = "v2.2 (Cookies Support)"
 
 # Настройки из переменных окружения
-TOKEN = os.environ.get("BOT_TOKEN", "YOUR_TOKEN_HERE")
+# ВАЖНО: Вставь сюда новый токен, старый был засвечен!
+TOKEN = os.environ.get("BOT_TOKEN", "YOUR_NEW_TOKEN_HERE")
 PORT = int(os.environ.get("PORT", 8080))
 
 logging.basicConfig(level=logging.INFO)
@@ -115,6 +116,15 @@ async def download_video(url, chat_id, quality_mode, status_msg):
     # Шаблон для имени файла
     filename_template = f'{downloads_dir}/{chat_id}_%(title)s.%(ext)s'
     
+    # === НАСТРОЙКА КУКИ ===
+    # Проверяем, есть ли файл cookies.txt в папке с ботом
+    cookie_file = 'cookies.txt'
+    use_cookies = os.path.exists(cookie_file)
+    if use_cookies:
+        logging.info("🍪 Found cookies.txt, using it for authentication.")
+    else:
+        logging.warning("⚠️ cookies.txt not found. YouTube might block requests.")
+
     # Базовые настройки yt-dlp
     ydl_opts = {
         'outtmpl': filename_template,
@@ -123,6 +133,8 @@ async def download_video(url, chat_id, quality_mode, status_msg):
         'noplaylist': True,
         'extractor_retries': 3,
         'fragment_retries': 3,
+        # Если есть куки - добавляем их
+        'cookiefile': cookie_file if use_cookies else None,
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     }
     
@@ -152,7 +164,7 @@ async def download_video(url, chat_id, quality_mode, status_msg):
                     'skip': ['dash', 'hls']
                 }
             },
-            # Обход бота-детектора YouTube
+            # Обход бота-детектора YouTube (даже с куками полезно)
             'http_headers': {
                 'User-Agent': 'com.google.ios.youtube/19.29.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X;)',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -173,7 +185,6 @@ async def download_video(url, chat_id, quality_mode, status_msg):
     try:
         await status_msg.edit_text("🔍 <b>Получаю информацию...</b>")
         
-        # Загрузка в отдельном потоке
         loop = asyncio.get_event_loop()
         
         def download():
@@ -185,16 +196,17 @@ async def download_video(url, chat_id, quality_mode, status_msg):
         try:
             info, downloaded_file = await loop.run_in_executor(None, download)
         except Exception as first_error:
-            # Если YouTube блокирует - пробуем альтернативный метод
-            if platform == 'youtube' and ('Sign in' in str(first_error) or 'bot' in str(first_error).lower()):
+            # Если ошибка и это YouTube - пробуем упрощенный метод (тоже с куками)
+            if platform == 'youtube':
                 await status_msg.edit_text("🔄 <b>Пробую альтернативный метод...</b>")
                 
-                # Упрощенные настройки - только самое базовое
                 ydl_opts_fallback = {
                     'outtmpl': filename_template,
                     'quiet': True,
                     'no_warnings': True,
                     'format': 'best[ext=mp4]/best' if quality_mode != 'audio' else 'bestaudio/best',
+                    # Добавляем куки и сюда
+                    'cookiefile': cookie_file if use_cookies else None,
                     'extractor_args': {
                         'youtube': {
                             'player_client': ['android'],
@@ -280,36 +292,18 @@ async def download_video(url, chat_id, quality_mode, status_msg):
     except yt_dlp.utils.DownloadError as e:
         error_msg = str(e)
         
-        if '429' in error_msg or 'Too Many Requests' in error_msg:
-            await status_msg.edit_text(
-                "⛔️ <b>YouTube временно заблокировал сервер</b>\n\n"
-                "🔄 Попробуй:\n"
-                "• Подождать 5-10 минут\n"
-                "• Другое видео\n"
-                "• TikTok вместо YouTube"
+        if 'Sign in' in error_msg:
+             await status_msg.edit_text(
+                "🔐 <b>Требуется авторизация</b>\n\n"
+                "YouTube заблокировал доступ.\n"
+                "Администратору нужно обновить файл <code>cookies.txt</code>."
             )
-        elif 'not a bot' in error_msg or 'Sign in' in error_msg:
-            await status_msg.edit_text(
-                "🤖 <b>YouTube усилил защиту от ботов</b>\n\n"
-                "К сожалению, это видео защищено.\n\n"
-                "✅ <b>Что работает:</b>\n"
-                "• TikTok\n"
-                "• Instagram\n"
-                "• Менее популярные YouTube видео\n\n"
-                "💡 <b>Совет:</b> Попробуй другое видео или платформу"
-            )
+        elif '429' in error_msg:
+            await status_msg.edit_text("⛔️ <b>Слишком много запросов</b>\nYouTube временно заблокировал IP.")
         elif 'Private video' in error_msg:
             await status_msg.edit_text("🔒 <b>Приватное видео</b>\nДоступ закрыт")
-        elif 'not available' in error_msg.lower() or 'removed' in error_msg.lower():
-            await status_msg.edit_text("❌ <b>Видео недоступно</b>\nВозможно удалено или ограничено в твоём регионе")
-        elif 'age' in error_msg.lower() and 'restricted' in error_msg.lower():
-            await status_msg.edit_text("🔞 <b>Видео с возрастным ограничением</b>\nТребуется вход в аккаунт")
         else:
-            await status_msg.edit_text(
-                f"❌ <b>Ошибка загрузки</b>\n\n"
-                f"<code>{error_msg[:300]}</code>\n\n"
-                f"💡 Попробуй другую платформу или видео"
-            )
+            await status_msg.edit_text(f"❌ <b>Ошибка загрузки</b>\n\n<code>{error_msg[:200]}</code>")
         
     except Exception as e:
         logging.error(f"Error downloading: {e}")
@@ -331,106 +325,60 @@ async def download_video(url, chat_id, quality_mode, status_msg):
 async def cmd_start(message: types.Message):
     await message.answer(
         f"👋 <b>Привет!</b>\n\n"
-        f"🤖 Версия: <code>{BOT_VERSION}</code>\n\n"
-        "Я умею скачивать видео с:\n"
-        "• YouTube ⚠️ (ограниченная работа)\n"
-        "• TikTok ✅\n"
-        "• Instagram ✅\n\n"
-        "Просто отправь мне ссылку! 🎬\n\n"
-        "ℹ️ /status - проверить статус",
-        reply_markup=None
+        f"🤖 Версия: <code>{BOT_VERSION}</code>\n"
+        "Отправь мне ссылку на видео (YouTube, TikTok, Instagram)."
     )
 
 @dp.message(Command("status"))
 async def cmd_status(message: types.Message):
+    has_cookies = os.path.exists('cookies.txt')
     await message.answer(
-        f"📊 <b>Статус бота</b>\n\n"
-        f"🤖 Версия: <code>{BOT_VERSION}</code>\n"
-        f"✅ Работает: Да\n\n"
-        f"<b>Платформы:</b>\n"
-        f"• TikTok: ✅ Отлично\n"
-        f"• Instagram: ✅ Отлично\n"
-        f"• YouTube: ⚠️ Ограничено*\n\n"
-        f"<i>*YouTube активно блокирует ботов.\n"
-        f"Работает не для всех видео.</i>"
+        f"📊 <b>Статус</b>\n"
+        f"🍪 Cookies.txt: {'✅ Загружен' if has_cookies else '❌ Отсутствует'}\n"
+        f"Если YouTube не работает — обнови куки."
     )
 
 @dp.message(F.text)
 async def process_link(message: types.Message):
     url = message.text.strip()
     
-    # Проверка на ссылку
     if not url.startswith(('http://', 'https://')):
-        await message.answer("❌ Это не похоже на ссылку. Отправь URL видео!")
+        await message.answer("❌ Это не ссылка.")
         return
     
-    platform = get_platform(url)
-    
-    if platform == 'other':
-        await message.answer(
-            "⚠️ <b>Неизвестная платформа</b>\n\n"
-            "Поддерживаются:\n"
-            "• YouTube (youtube.com, youtu.be)\n"
-            "• TikTok (tiktok.com)\n"
-            "• Instagram (instagram.com)"
-        )
-        return
-    
-    # Сохраняем URL
     user_data[message.from_user.id] = url
     
-    platform_emoji = {
-        'youtube': '📺 YouTube',
-        'tiktok': '🎵 TikTok',
-        'instagram': '📸 Instagram'
-    }
-    
     await message.answer(
-        f"{platform_emoji.get(platform, '🎬')}\n\n"
-        "Выбери качество:",
+        "🎬 Выбери качество:",
         reply_markup=get_quality_keyboard()
     )
 
 @dp.callback_query(F.data.startswith("quality_"))
 async def process_quality(callback: types.CallbackQuery):
     url = user_data.get(callback.from_user.id)
-    
     if not url:
-        await callback.message.edit_text("❌ Ссылка устарела. Отправь новую!")
+        await callback.message.edit_text("❌ Ссылка устарела.")
         return
     
-    # Парсим режим качества
     parts = callback.data.split("_")
-    if len(parts) >= 3:
-        quality_mode = f"{parts[1]}_{parts[2]}"
-    else:
-        quality_mode = parts[1]
+    quality_mode = f"{parts[1]}_{parts[2]}" if len(parts) >= 3 else parts[1]
     
-    # Создаем статусное сообщение
     status_msg = await callback.message.edit_text("⏳ <b>Начинаю загрузку...</b>")
-    
-    # Запускаем загрузку
     await download_video(url, callback.message.chat.id, quality_mode, status_msg)
-    
-    # Очищаем данные пользователя
     user_data.pop(callback.from_user.id, None)
 
 # === MAIN ===
 async def main():
-    """Основная функция запуска бота"""
     os.makedirs('downloads', exist_ok=True)
     
-    logging.info(f"🚀 Starting bot {BOT_VERSION}...")
-    
-    # Запускаем веб-сервер для Render
+    # Проверка куки при запуске
+    if os.path.exists('cookies.txt'):
+        logging.info("🍪 Cookies.txt detected! YouTube support enabled.")
+    else:
+        logging.warning("⚠️ Cookies.txt NOT found. YouTube videos might fail.")
+
     asyncio.create_task(start_web_server())
-    
-    # Удаляем webhook если был
     await bot.delete_webhook(drop_pending_updates=True)
-    
-    logging.info(f"✅ Bot {BOT_VERSION} is running!")
-    
-    # Запускаем polling
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
