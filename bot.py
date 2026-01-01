@@ -11,7 +11,7 @@ from aiogram.client.default import DefaultBotProperties
 import yt_dlp
 
 # Настройки из переменных окружения
-TOKEN = os.environ.get("BOT_TOKEN", "8250742177:AAGOPppYA5PALhoNwZsfoa_uLdQcE3m3Ktc")
+TOKEN = os.environ.get("BOT_TOKEN", "YOUR_TOKEN_HERE")
 PORT = int(os.environ.get("PORT", 8080))
 
 logging.basicConfig(level=logging.INFO)
@@ -118,8 +118,9 @@ async def download_video(url, chat_id, quality_mode, status_msg):
         'quiet': False,
         'no_warnings': False,
         'noplaylist': True,
-        'cookiefile': None,
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'extractor_retries': 3,
+        'fragment_retries': 3,
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     }
     
     # Настройка формата в зависимости от выбора
@@ -141,12 +142,21 @@ async def download_video(url, chat_id, quality_mode, status_msg):
     
     # Специфичные настройки для платформ
     if platform == 'youtube':
-        ydl_opts['extractor_args'] = {
-            'youtube': {
-                'player_client': ['ios', 'web'],
-                'skip': ['dash', 'hls']
+        ydl_opts.update({
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['ios', 'web', 'android'],
+                    'skip': ['dash', 'hls']
+                }
+            },
+            # Обход бота-детектора YouTube
+            'http_headers': {
+                'User-Agent': 'com.google.ios.youtube/19.29.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X;)',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-us,en;q=0.5',
+                'Sec-Fetch-Mode': 'navigate',
             }
-        }
+        })
     elif platform == 'tiktok':
         ydl_opts['http_headers'] = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -231,8 +241,20 @@ async def download_video(url, chat_id, quality_mode, status_msg):
         
     except yt_dlp.utils.DownloadError as e:
         error_msg = str(e)
-        if '429' in error_msg:
-            await status_msg.edit_text("⛔️ <b>Слишком много запросов</b>\nПопробуй через минуту")
+        if '429' in error_msg or 'Too Many Requests' in error_msg:
+            await status_msg.edit_text(
+                "⛔️ <b>YouTube временно заблокировал сервер</b>\n\n"
+                "Это происходит из-за большого количества запросов.\n"
+                "Попробуй через 5-10 минут или используй другой сервис."
+            )
+        elif 'not a bot' in error_msg or 'Sign in' in error_msg:
+            await status_msg.edit_text(
+                "🤖 <b>YouTube требует верификацию</b>\n\n"
+                "К сожалению, YouTube усилил защиту от ботов.\n"
+                "Попробуй:\n"
+                "• Другое видео\n"
+                "• TikTok или Instagram вместо YouTube"
+            )
         elif 'Private video' in error_msg:
             await status_msg.edit_text("🔒 <b>Приватное видео</b>\nНет доступа")
         elif 'not available' in error_msg.lower():
