@@ -10,6 +10,9 @@ from aiogram.types import FSInputFile, InlineKeyboardMarkup, InlineKeyboardButto
 from aiogram.client.default import DefaultBotProperties
 import yt_dlp
 
+# === ВЕРСИЯ БОТА ===
+BOT_VERSION = "v2.1"
+
 # Настройки из переменных окружения
 TOKEN = os.environ.get("BOT_TOKEN", "YOUR_TOKEN_HERE")
 PORT = int(os.environ.get("PORT", 8080))
@@ -178,7 +181,42 @@ async def download_video(url, chat_id, quality_mode, status_msg):
                 info = ydl.extract_info(url, download=True)
                 return info, ydl.prepare_filename(info)
         
-        info, downloaded_file = await loop.run_in_executor(None, download)
+        # Попытка скачать
+        try:
+            info, downloaded_file = await loop.run_in_executor(None, download)
+        except Exception as first_error:
+            # Если YouTube блокирует - пробуем альтернативный метод
+            if platform == 'youtube' and ('Sign in' in str(first_error) or 'bot' in str(first_error).lower()):
+                await status_msg.edit_text("🔄 <b>Пробую альтернативный метод...</b>")
+                
+                # Упрощенные настройки - только самое базовое
+                ydl_opts_fallback = {
+                    'outtmpl': filename_template,
+                    'quiet': True,
+                    'no_warnings': True,
+                    'format': 'best[ext=mp4]/best' if quality_mode != 'audio' else 'bestaudio/best',
+                    'extractor_args': {
+                        'youtube': {
+                            'player_client': ['android'],
+                        }
+                    },
+                }
+                
+                if quality_mode == 'audio':
+                    ydl_opts_fallback['postprocessors'] = [{
+                        'key': 'FFmpegExtractAudio',
+                        'preferredcodec': 'mp3',
+                        'preferredquality': '192',
+                    }]
+                
+                def download_fallback():
+                    with yt_dlp.YoutubeDL(ydl_opts_fallback) as ydl:
+                        info = ydl.extract_info(url, download=True)
+                        return info, ydl.prepare_filename(info)
+                
+                info, downloaded_file = await loop.run_in_executor(None, download_fallback)
+            else:
+                raise first_error
         
         # Поиск скачанного файла
         base_name = os.path.splitext(downloaded_file)[0]
@@ -241,26 +279,37 @@ async def download_video(url, chat_id, quality_mode, status_msg):
         
     except yt_dlp.utils.DownloadError as e:
         error_msg = str(e)
+        
         if '429' in error_msg or 'Too Many Requests' in error_msg:
             await status_msg.edit_text(
                 "⛔️ <b>YouTube временно заблокировал сервер</b>\n\n"
-                "Это происходит из-за большого количества запросов.\n"
-                "Попробуй через 5-10 минут или используй другой сервис."
+                "🔄 Попробуй:\n"
+                "• Подождать 5-10 минут\n"
+                "• Другое видео\n"
+                "• TikTok вместо YouTube"
             )
         elif 'not a bot' in error_msg or 'Sign in' in error_msg:
             await status_msg.edit_text(
-                "🤖 <b>YouTube требует верификацию</b>\n\n"
-                "К сожалению, YouTube усилил защиту от ботов.\n"
-                "Попробуй:\n"
-                "• Другое видео\n"
-                "• TikTok или Instagram вместо YouTube"
+                "🤖 <b>YouTube усилил защиту от ботов</b>\n\n"
+                "К сожалению, это видео защищено.\n\n"
+                "✅ <b>Что работает:</b>\n"
+                "• TikTok\n"
+                "• Instagram\n"
+                "• Менее популярные YouTube видео\n\n"
+                "💡 <b>Совет:</b> Попробуй другое видео или платформу"
             )
         elif 'Private video' in error_msg:
-            await status_msg.edit_text("🔒 <b>Приватное видео</b>\nНет доступа")
-        elif 'not available' in error_msg.lower():
-            await status_msg.edit_text("❌ <b>Видео недоступно</b>\nВозможно удалено или ограничено")
+            await status_msg.edit_text("🔒 <b>Приватное видео</b>\nДоступ закрыт")
+        elif 'not available' in error_msg.lower() or 'removed' in error_msg.lower():
+            await status_msg.edit_text("❌ <b>Видео недоступно</b>\nВозможно удалено или ограничено в твоём регионе")
+        elif 'age' in error_msg.lower() and 'restricted' in error_msg.lower():
+            await status_msg.edit_text("🔞 <b>Видео с возрастным ограничением</b>\nТребуется вход в аккаунт")
         else:
-            await status_msg.edit_text(f"❌ <b>Ошибка загрузки:</b>\n<code>{error_msg[:200]}</code>")
+            await status_msg.edit_text(
+                f"❌ <b>Ошибка загрузки</b>\n\n"
+                f"<code>{error_msg[:300]}</code>\n\n"
+                f"💡 Попробуй другую платформу или видео"
+            )
         
     except Exception as e:
         logging.error(f"Error downloading: {e}")
@@ -281,13 +330,29 @@ async def download_video(url, chat_id, quality_mode, status_msg):
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.answer(
-        "👋 <b>Привет!</b>\n\n"
+        f"👋 <b>Привет!</b>\n\n"
+        f"🤖 Версия: <code>{BOT_VERSION}</code>\n\n"
         "Я умею скачивать видео с:\n"
-        "• YouTube\n"
-        "• TikTok\n"
-        "• Instagram\n\n"
-        "Просто отправь мне ссылку! 🎬",
+        "• YouTube ⚠️ (ограниченная работа)\n"
+        "• TikTok ✅\n"
+        "• Instagram ✅\n\n"
+        "Просто отправь мне ссылку! 🎬\n\n"
+        "ℹ️ /status - проверить статус",
         reply_markup=None
+    )
+
+@dp.message(Command("status"))
+async def cmd_status(message: types.Message):
+    await message.answer(
+        f"📊 <b>Статус бота</b>\n\n"
+        f"🤖 Версия: <code>{BOT_VERSION}</code>\n"
+        f"✅ Работает: Да\n\n"
+        f"<b>Платформы:</b>\n"
+        f"• TikTok: ✅ Отлично\n"
+        f"• Instagram: ✅ Отлично\n"
+        f"• YouTube: ⚠️ Ограничено*\n\n"
+        f"<i>*YouTube активно блокирует ботов.\n"
+        f"Работает не для всех видео.</i>"
     )
 
 @dp.message(F.text)
@@ -355,7 +420,7 @@ async def main():
     """Основная функция запуска бота"""
     os.makedirs('downloads', exist_ok=True)
     
-    logging.info("🚀 Starting bot...")
+    logging.info(f"🚀 Starting bot {BOT_VERSION}...")
     
     # Запускаем веб-сервер для Render
     asyncio.create_task(start_web_server())
@@ -363,7 +428,7 @@ async def main():
     # Удаляем webhook если был
     await bot.delete_webhook(drop_pending_updates=True)
     
-    logging.info("✅ Bot is running!")
+    logging.info(f"✅ Bot {BOT_VERSION} is running!")
     
     # Запускаем polling
     await dp.start_polling(bot)
