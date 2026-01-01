@@ -11,7 +11,7 @@ from aiogram.client.default import DefaultBotProperties
 import yt_dlp
 
 # Настройки из переменных окружения
-TOKEN = os.environ.get("BOT_TOKEN", "YOUR_TOKEN_HERE")
+TOKEN = os.environ.get("BOT_TOKEN", "8250742177:AAGOPppYA5PALhoNwZsfoa_uLdQcE3m3Ktc")
 PORT = int(os.environ.get("PORT", 8080))
 
 logging.basicConfig(level=logging.INFO)
